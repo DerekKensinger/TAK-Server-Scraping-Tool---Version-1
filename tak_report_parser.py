@@ -17,9 +17,8 @@ import re
 import shutil
 import threading
 from pygeodesy import ellipsoidalVincenty as ev
-# Alternatively, you can use ellipsoidalNvector or ellipsoidalKarney based on your needs
-import Home_Page
-
+import configparser  # Added for configuration file handling
+import Home_Page  # Ensure this import is correct in your environment
 
 # Set up customtkinter
 ctk.set_appearance_mode("System")
@@ -29,11 +28,31 @@ class TAKReportGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # Window settings
-        self.title("TAK Report Parser")
-        self.geometry("800x700")
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        # Configuration file path
+        self.config_file = 'config.ini'
+        self.config = configparser.ConfigParser()
+
+        # Check if config file exists
+        if os.path.exists(self.config_file):
+            # Read the config file
+            self.config.read(self.config_file)
+            if 'Settings' in self.config and 'output_folder' in self.config['Settings']:
+                self.output_parent_folder = self.config['Settings']['output_folder']
+            else:
+                # Config file exists but output_folder not set
+                self.select_output_folder()
+        else:
+            # Config file does not exist, prompt user to select output folder
+            self.select_output_folder()
+
+        # Define output paths after setting the output_parent_folder
+        self.repository_folder = os.path.join(self.output_parent_folder, 'ServerConnections')
+        self.repository_file = os.path.join(self.repository_folder, 'connections.csv')
+        self.media_folder = os.path.join(self.output_parent_folder, 'TAK Reports Media')
+        self.combined_reports_path = os.path.join(self.output_parent_folder, 'combined_reports.xml')
+
+        # Ensure directories exist
+        self.ensure_directories()
 
         # User input variables
         self.pfx_file_path = ctk.StringVar()
@@ -44,20 +63,23 @@ class TAKReportGUI(ctk.CTk):
         self.timezone_selection = ctk.StringVar(value="EST")
         self.start_datetime_str = ctk.StringVar()  # Variable for start date/time
 
-        # Define output paths
-        desktop_path = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop')
-        self.output_parent_folder = os.path.join(desktop_path, 'Covan TAK Report Parser Outputs')
-        self.repository_folder = os.path.join(self.output_parent_folder, 'ServerConnections')
-        self.repository_file = os.path.join(self.repository_folder, 'connections.csv')
-        self.media_folder = os.path.join(self.output_parent_folder, 'TAK Reports Media')
-        self.combined_reports_path = os.path.join(self.output_parent_folder, 'combined_reports.xml')
-
-        # Ensure directories exist
-        self.ensure_directories()
-
         # Setup frames
         self.setup_frames()
         self.mainloop()
+
+    def select_output_folder(self):
+        messagebox.showinfo("Select Output Folder", "Please select the output folder for exported files.")
+        folder_selected = filedialog.askdirectory()
+        if folder_selected:
+            self.output_parent_folder = folder_selected
+
+            # Save to config file
+            self.config['Settings'] = {'output_folder': self.output_parent_folder}
+            with open(self.config_file, 'w') as configfile:
+                self.config.write(configfile)
+        else:
+            messagebox.showerror("No Folder Selected", "No folder was selected. The application will now exit.")
+            self.quit()
 
     def ensure_directories(self):
         os.makedirs(self.output_parent_folder, exist_ok=True)
@@ -128,7 +150,7 @@ class TAKReportGUI(ctk.CTk):
         port = self.port_number.get()
         template_path = self.template_path.get()
         timezone = self.timezone_selection.get()
-        start_datetime_str = self.start_datetime_str.get()  # Get the start date/time input
+        start_datetime_str = self.start_datetime_str.get()
 
         # Validate all inputs, including the new Start Date/Time field
         if not all([pfx_file, password, base_url, port, template_path, start_datetime_str]):
@@ -204,7 +226,7 @@ class TAKReportGUI(ctk.CTk):
                 'Port': port,
                 'PFX File': pfx_file,
                 'Password': password,
-                'Template Path': template_path  
+                'Template Path': template_path
             })
 
     def get_next_ticket_number(self):
@@ -231,7 +253,7 @@ class TAKReportGUI(ctk.CTk):
             self.pfx_password.set(selected_connection['Password'])
             self.base_url.set(selected_connection['Base URL'])
             self.port_number.set(selected_connection['Port'])
-            self.template_path.set(selected_connection['Template Path'])  
+            self.template_path.set(selected_connection['Template Path'])
 
     def validate_file_path(self, path):
         return os.path.isfile(path)
@@ -256,7 +278,7 @@ class TAKReportGUI(ctk.CTk):
         password = self.pfx_password.get()
         base_url = self.base_url.get()
         port = self.port_number.get()
-        template_path = self.template_path.get()  
+        template_path = self.template_path.get()
 
         if not self.validate_file_path(pfx_file):
             messagebox.showerror("Error", "Invalid PFX file path. Please check the path and try again.")
@@ -310,19 +332,23 @@ class TAKReportGUI(ctk.CTk):
         ctk.CTkLabel(selection_window, text="Select a ticket number:").grid(row=0, column=0, pady=10)
 
         # Create a standard tkinter listbox (since customtkinter doesn't support Listbox natively)
-        listbox = ctk.CTkFrame(selection_window)  # Replace CTkListbox with a frame containing tkinter Listbox
-        lb = tkinter.Listbox(listbox, height=12, width=50, font=("Arial", 20))
-        lb.grid(row=1, column=0, padx=20, pady=20)
-        listbox.grid(row=1, column=0)
+        listbox_frame = ctk.CTkFrame(selection_window)
+        listbox_frame.grid(row=1, column=0, padx=10, pady=10)
+        lb = tkinter.Listbox(listbox_frame, height=12, width=50, font=("Arial", 20))
+        lb.pack()
 
         # Populate the listbox with ticket numbers
         for ticket in ticket_numbers:
             lb.insert("end", ticket)
 
         def on_select():
-            selected_ticket = lb.get(lb.curselection())
-            selection_window.destroy()  # Close the window once a selection is made
-            self.selected_ticket = selected_ticket
+            try:
+                selected_ticket = lb.get(lb.curselection())
+                selection_window.destroy()  # Close the window once a selection is made
+                self.selected_ticket = selected_ticket
+            except tkinter.TclError:
+                messagebox.showerror("Selection Error", "Please select a ticket.")
+                return
 
         # Add select button
         select_button = ctk.CTkButton(selection_window, text="Select", command=on_select)
@@ -426,7 +452,6 @@ class TAKReportGUI(ctk.CTk):
             print(f"Failed to convert Lat/Long to MGRS: {e}")
             return f"{lat_str}, {lon_str}"
 
-
     def extract_latlong_from_location(self, location_str):
         if location_str is None:
             print("No location data found; skipping extraction.")  # Log to console
@@ -460,7 +485,7 @@ class TAKReportGUI(ctk.CTk):
                 else:
                     # Handles cases like '2024-09-13T17:45:48Z'
                     zulu_time = datetime.strptime(zulu_time_str, '%Y-%m-%dT%H:%M:%SZ')
-                
+
                 # Convert Zulu time to local time
                 local_time = zulu_time.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=tz_offset)))
                 return local_time.strftime('%Y-%m-%d %H:%M:%S')  # Ensure format matches input format
@@ -469,6 +494,14 @@ class TAKReportGUI(ctk.CTk):
             return zulu_time_str  # Return original if parsing fails
 
     def parse_reports(self, templates, reports, output_path, tz_offset, tz_name):
+        def safe_value(value):
+            if value is None:
+                return ' '
+            elif isinstance(value, str) and value.strip() == '':
+                return ' '
+            else:
+                return value
+
         try:
             workbook = Workbook()
             workbook.remove(workbook.active)  # Remove the default sheet created by Workbook()
@@ -501,7 +534,7 @@ class TAKReportGUI(ctk.CTk):
                                 # Convert the Zulu time to the selected timezone
                                 zulu_time = report.get(field['attribute'])
                                 local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                row.append(local_time)
+                                row.append(safe_value(local_time))
                                 try:
                                     # Updated format string to match 'YYYY-MM-DD HH:MM:SS'
                                     report_time = datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
@@ -514,11 +547,12 @@ class TAKReportGUI(ctk.CTk):
                                 lat, lon = self.extract_latlong_from_location(location_str)
                                 if lat is not None and lon is not None:
                                     mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
-                                    row.append(mgrs_coord)
+                                    row.append(safe_value(mgrs_coord))
                                 else:
-                                    row.append('')  # Empty cell if extraction fails
+                                    row.append(' ')  # Use space instead of empty cell
                             elif field['type'] == 'geometry':
                                 # Handle geometry type fields within sections
+                                found_geometry = False
                                 for section in report.findall('.//section'):
                                     for option in section.findall('option'):
                                         if option.get('title') == field['csv_header'] and option.get('type') == 'geometry':
@@ -526,17 +560,25 @@ class TAKReportGUI(ctk.CTk):
                                             lat, lon = self.extract_latlong_from_location(location_str)
                                             if lat is not None and lon is not None:
                                                 mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
-                                                row.append(mgrs_coord)
+                                                row.append(safe_value(mgrs_coord))
                                             else:
-                                                row.append('')  # Empty cell if extraction fails
+                                                row.append(' ')  # Use space instead of empty cell
+                                            found_geometry = True
+                                            break
+                                    if found_geometry:
+                                        break
+                                if not found_geometry:
+                                    row.append(' ')
                             elif field['type'] == 'section':
-                                row.append('')
+                                row.append(' ')
                             elif field['type'] == 'text':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                row.append(element.get(field['attribute']) if element is not None else '')
+                                value = element.get(field['attribute']) if element is not None else None
+                                row.append(safe_value(value))
                             elif field['type'] == 'checkbox':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                row.append('X' if element is not None and element.get('value') == 'True' else '')
+                                value = 'X' if element is not None and element.get('value') == 'True' else ' '
+                                row.append(value)
                             elif field['type'] == 'date':
                                 # Retrieve the Zulu time from the option element
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
@@ -545,31 +587,38 @@ class TAKReportGUI(ctk.CTk):
                                 # Convert the Zulu time to the selected timezone
                                 if zulu_time:
                                     local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                    row.append(local_time)
+                                    row.append(safe_value(local_time))
                                 else:
-                                    row.append('')
+                                    row.append(' ')
                             elif field['type'] == 'number_with_units':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
                                 if element is not None:
                                     value = element.get('value')
                                     unit = element.get('unitValue')
-                                    row.append(f"{value} {unit}" if value and unit else '')
+                                    combined_value = f"{value} {unit}" if value and unit else None
+                                    row.append(safe_value(combined_value))
                                 else:
-                                    row.append('')
+                                    row.append(' ')
                             elif field['type'] == 'number':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                row.append(element.get('value') if element is not None else '')
+                                value = element.get('value') if element is not None else None
+                                row.append(safe_value(value))
                             elif field['type'] == 'range':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                row.append(element.get('value') if element is not None else '')
+                                value = element.get('value') if element is not None else None
+                                row.append(safe_value(value))
                             elif field['type'] == 'route':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                row.append(element.get('value') if element is not None else '')
+                                value = element.get('value') if element is not None else None
+                                row.append(safe_value(value))
                             elif field['type'] == 'time':
                                 element = report.find('.//option[@title="' + field['xml_path'] + '"]')
                                 zulu_time = element.get('value') if element is not None else None
-                                local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                row.append(local_time)
+                                if zulu_time:
+                                    local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
+                                    row.append(safe_value(local_time))
+                                else:
+                                    row.append(' ')
                             elif field['type'] == 'list':
                                 selected_option = None
                                 list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
@@ -578,7 +627,7 @@ class TAKReportGUI(ctk.CTk):
                                         if option.get('selected') == 'true':
                                             selected_option = option.get('title')
                                             break
-                                row.append(selected_option if selected_option else '')
+                                row.append(safe_value(selected_option))
                             elif field['type'] == 'multi-select':
                                 selected_options = []
                                 list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
@@ -586,13 +635,15 @@ class TAKReportGUI(ctk.CTk):
                                     for option in list_element.findall('.//option'):
                                         if option.get('selected') == 'true':
                                             selected_options.append(option.get('title'))
-                                row.append(', '.join(selected_options) if selected_options else '')
+                                multi_value = ', '.join(selected_options) if selected_options else None
+                                row.append(safe_value(multi_value))
                             elif field['attribute']:
-                                element = report.get(field['attribute'])
-                                row.append(element if element is not None else '')
+                                value = report.get(field['attribute'])
+                                row.append(safe_value(value))
                             else:
                                 element = report.find(field['xml_path'])
-                                row.append(element.text if element is not None else '')
+                                value = element.text if element is not None else None
+                                row.append(safe_value(value))
 
                         # Skip reports before the specified start date/time
                         if report_time and report_time < self.start_datetime:
@@ -619,13 +670,40 @@ class TAKReportGUI(ctk.CTk):
                 for _, row in sorted_duplicates:
                     duplicate_sheet.append(row)
 
+            # **Delete column F (index 6) and any 'UNIT' columns in every sheet**
+
+            # Define the header name to delete
+            unit_header = 'UNIT'
+
+            # Iterate over all sheets in the workbook
+            for sheet in workbook.worksheets:
+                # First, delete column F unconditionally
+                try:
+                    sheet.delete_cols(6)  # Column F has index 6
+                except Exception as e:
+                    # Log the error and continue if column F doesn't exist
+                    print(f"Failed to delete column F in sheet '{sheet.title}': {e}")
+
+                # Now, find and delete any columns with header 'UNIT'
+                header_row = [cell.value for cell in sheet[1]]  # Assuming the first row is the header
+
+                # Find all column indices where header is 'UNIT'
+                unit_columns = [idx + 1 for idx, header in enumerate(header_row) if isinstance(header, str) and header.strip().lower() == unit_header.lower()]
+
+                # Delete 'UNIT' columns from right to left to prevent shifting issues
+                for col_idx in sorted(unit_columns, reverse=True):
+                    try:
+                        sheet.delete_cols(col_idx)
+                    except Exception as e:
+                        # Log the error and continue
+                        print(f"Failed to delete 'UNIT' column at index {col_idx} in sheet '{sheet.title}': {e}")
+
             workbook.save(output_path)
             # messagebox.showinfo("Success", f"Reports parsed and saved to {output_path}")
-        
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred while parsing reports: {e}")
 
-    # Function to fetch reports and save non-XML media files with sequential folder names
     def fetch_reports(self, metadata_url, file_url_template, ssl_cert):
         reports = []
         combined_reports = ET.Element('CombinedReports')
@@ -679,18 +757,16 @@ class TAKReportGUI(ctk.CTk):
         self.process_next_entry()
 
     def process_next_entry(self):
-        output_file_path = f"Exported TAK Reports {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
         if self.current_index >= self.total_entries:
             # All entries processed
             # Save combined reports if any are found
             if len(self.combined_reports) > 0:
                 combined_tree = ET.ElementTree(self.combined_reports)
                 combined_tree.write(self.combined_reports_path, encoding='utf-8', xml_declaration=True)
-                messagebox.showinfo("Reports Saved & Parsed", f"Combined XML reports saved to {self.combined_reports_path}. OR Reports are parsed and saved to {output_file_path}")
+                messagebox.showinfo("Reports Saved & Parsed", f"Combined XML reports saved to {self.combined_reports_path}.")
             else:
                 messagebox.showinfo("No Reports", "No citrap reports found to save.")
 
-            # Close the progress window
             self.progress_window.destroy()
 
             # Proceed to the next step, e.g., parsing reports
@@ -706,6 +782,7 @@ class TAKReportGUI(ctk.CTk):
                 tz_offset = tz_offsets.get(timezone, -5)  # Default to EST
                 tz_name = timezone
                 self.parse_reports(self.templates, self.reports, output_path, tz_offset, tz_name)
+                messagebox.showinfo("Success", f"Reports parsed and saved to {output_path}")
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred: {e}")
 
@@ -778,7 +855,7 @@ class TAKReportGUI(ctk.CTk):
 
                             self.folder_counter += 1  # Increment the folder counter
                     except zipfile.BadZipFile:
-                        messagebox.showerror("Bad ZIP", f"Bad ZIP file: {file_info['Name']}. Skipping this entry.")
+                        # messagebox.showerror("Bad ZIP", f"Bad ZIP file: {file_info['Name']}. Skipping this entry.")
                         break  # Skip this file and move to the next entry
 
                 elif file_info['MimeType'] == 'application/xml' or file_info['Name'].endswith('.xml'):
