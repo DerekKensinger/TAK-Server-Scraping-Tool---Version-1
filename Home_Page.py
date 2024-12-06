@@ -2,7 +2,7 @@ import customtkinter as ctk
 import tak_report_parser
 import geochat_parser
 import zello_voip_export
-import cot_logs_cleaner
+# Note: We remove `import cot_parser` here to avoid circular import.
 
 def open_home_page():
     root = ctk.CTk()
@@ -26,14 +26,17 @@ def open_home_page():
             geochat_parser.GeoChatParserGUI()
         elif script_name == "zello_voip_export":
             zello_voip_export.ZelloVoipExportGUI()
-        elif script_name == "cot_logs_cleaner":
-            cot_logs_cleaner.CoTLogsCleanerGUI()
+        elif script_name == "cot_parser":
+            # Import here to avoid circular imports.
+            import cot_parser
+            app = cot_parser.CoTParserGUI()
+            app.mainloop()
 
     buttons_info = [
         ("TAK Report Parser", "tak_report_parser"),
         ("GeoChat Parser", "geochat_parser"),
         ("Zello VOIP Exporter - Coming Soon", "zello_voip_export"),
-        ("CoT Logs Cleaner - Coming Soon", "cot_logs_cleaner"),
+        ("CoT Data Processor", "cot_parser"),
     ]
 
     for i, (button_text, script_name) in enumerate(buttons_info):
@@ -49,6 +52,5 @@ def open_home_page():
 
     root.mainloop()
 
-# If you want this to be executable as well
 if __name__ == "__main__":
     open_home_page()

@@ -17,8 +17,12 @@ import re
 import shutil
 import threading
 from pygeodesy import ellipsoidalVincenty as ev
-import configparser  # Added for configuration file handling
-import Home_Page  # Ensure this import is correct in your environment
+import configparser
+import Home_Page
+import urllib3
+
+# Suppress InsecureRequestWarning messages for faster parsing
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Set up customtkinter
 ctk.set_appearance_mode("System")
@@ -63,6 +67,9 @@ class TAKReportGUI(ctk.CTk):
         self.timezone_selection = ctk.StringVar(value="EST")
         self.start_datetime_str = ctk.StringVar()  # Variable for start date/time
 
+        # New Variable for Output Option
+        self.output_option = ctk.StringVar(value="Combined Workbook")  # Default option
+
         # Setup frames
         self.setup_frames()
         self.mainloop()
@@ -95,11 +102,11 @@ class TAKReportGUI(ctk.CTk):
         title_label = ctk.CTkLabel(input_frame, text="TAK Report Parser", font=("Arial", 36, "bold"))
         title_label.grid(row=0, column=0, columnspan=3, pady=(10, 20))
 
-        ctk.CTkLabel(input_frame, text="PFX File Path:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        ctk.CTkLabel(input_frame, text="TAK Certificate File Path:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
         ctk.CTkEntry(input_frame, textvariable=self.pfx_file_path, width=300).grid(row=1, column=1, padx=10, pady=10)
         ctk.CTkButton(input_frame, text="Browse", command=self.browse_pfx_file).grid(row=1, column=2, padx=10, pady=10)
 
-        ctk.CTkLabel(input_frame, text="PFX Password:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        ctk.CTkLabel(input_frame, text="TAK Certificate Password:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
         ctk.CTkEntry(input_frame, textvariable=self.pfx_password, show="*", width=300).grid(row=2, column=1, padx=10, pady=10)
 
         ctk.CTkLabel(input_frame, text="Base URL:").grid(row=3, column=0, padx=10, pady=10, sticky="e")
@@ -113,20 +120,20 @@ class TAKReportGUI(ctk.CTk):
         ctk.CTkButton(input_frame, text="Browse", command=self.browse_template_file).grid(row=5, column=2, padx=10, pady=10)
 
         ctk.CTkLabel(input_frame, text="Timezone:").grid(row=6, column=0, padx=10, pady=10, sticky="e")
-        ctk.CTkOptionMenu(input_frame, values=["EST", "CST", "MST", "PST"], command=self.set_timezone, variable=self.timezone_selection).grid(row=6, column=1, padx=10, pady=10, sticky="w")
+        ctk.CTkOptionMenu(input_frame, values=["EST", "CST", "MST", "PST"], variable=self.timezone_selection).grid(row=6, column=1, padx=10, pady=10, sticky="w")
 
-        # Updated Start Date/Time input fields
         ctk.CTkLabel(input_frame, text="Start Date/Time (YYYY-MM-DD HH:MM:SS):").grid(row=7, column=0, padx=10, pady=10, sticky="e")
         ctk.CTkEntry(input_frame, textvariable=self.start_datetime_str, width=300).grid(row=7, column=1, padx=10, pady=10)
 
-        # Adjusted row numbers for the buttons below
-        ctk.CTkButton(input_frame, text="Use Previous Connection", command=self.select_previous_connection, width=120).grid(row=8, column=0, columnspan=3, padx=20, pady=20, sticky="n")
+        ctk.CTkLabel(input_frame, text="CSV Output Option:").grid(row=8, column=0, padx=10, pady=10, sticky="e")
+        ctk.CTkOptionMenu(input_frame, values=["Combined Workbook", "Separate Workbooks"], variable=self.output_option).grid(row=8, column=1, padx=10, pady=10, sticky="w")
 
-        ctk.CTkButton(input_frame, text="Start Parsing", command=self.start_parsing, width=120).grid(row=9, column=0, columnspan=3, padx=20, pady=20, sticky="n")
+        ctk.CTkButton(input_frame, text="Use Previous Connection", command=self.select_previous_connection, width=120).grid(row=9, column=0, columnspan=3, padx=20, pady=20, sticky="n")
+
+        ctk.CTkButton(input_frame, text="Start Parsing", command=self.start_parsing, width=120).grid(row=10, column=0, columnspan=3, padx=20, pady=20, sticky="n")
         input_frame.grid_columnconfigure(0, weight=1)
         input_frame.grid_columnconfigure(1, weight=1)
 
-        # Add the Return to Home Page button at the bottom
         return_button = ctk.CTkButton(self, text="Return to Home Page", command=self.return_to_home)
         return_button.grid(pady=20)
 
@@ -151,6 +158,7 @@ class TAKReportGUI(ctk.CTk):
         template_path = self.template_path.get()
         timezone = self.timezone_selection.get()
         start_datetime_str = self.start_datetime_str.get()
+        output_option = self.output_option.get()
 
         # Validate all inputs, including the new Start Date/Time field
         if not all([pfx_file, password, base_url, port, template_path, start_datetime_str]):
@@ -159,19 +167,22 @@ class TAKReportGUI(ctk.CTk):
 
         # Parse and validate the Start Date/Time input
         try:
-            # Updated format string to match 'YYYY-MM-DD HH:MM:SS'
             self.start_datetime = datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
         except ValueError:
             messagebox.showerror("Input Error", "Invalid Start Date/Time format. Please use YYYY-MM-DD HH:MM:SS")
             return
 
-        confirmation = messagebox.askyesno("Confirmation", f"Proceed with the following details?\n\n"
-                                                           f"PFX File: {pfx_file}\n"
-                                                           f"Base URL: {base_url}\n"
-                                                           f"Port: {port}\n"
-                                                           f"Template Path: {template_path}\n"
-                                                           f"Timezone: {timezone}\n"
-                                                           f"Start Date/Time: {start_datetime_str}")
+        confirmation = messagebox.askyesno(
+            "Confirmation",
+            f"Proceed with the following details?\n\n"
+            f"PFX File: {pfx_file}\n"
+            f"Base URL: {base_url}\n"
+            f"Port: {port}\n"
+            f"Template Path: {template_path}\n"
+            f"Timezone: {timezone}\n"
+            f"Start Date/Time: {start_datetime_str}\n"
+            f"Output Option: {output_option}"
+        )
         if confirmation:
             self.run_process()
 
@@ -212,7 +223,6 @@ class TAKReportGUI(ctk.CTk):
         return []
 
     def write_connection(self, ticket_number, base_url, port, pfx_file, password, template_path):
-        # Added template_path to the connection record
         fieldnames = ['Ticket Number', 'Base URL', 'Port', 'PFX File', 'Password', 'Template Path']
         file_exists = os.path.exists(self.repository_file)
 
@@ -493,7 +503,7 @@ class TAKReportGUI(ctk.CTk):
             print(f"Failed to convert Zulu time to {tz_name}: {e}")  # Log to console
             return zulu_time_str  # Return original if parsing fails
 
-    def parse_reports(self, templates, reports, output_path, tz_offset, tz_name):
+    def parse_reports(self, templates, reports, tz_offset, tz_name):
         def safe_value(value):
             if value is None:
                 return ' '
@@ -503,206 +513,261 @@ class TAKReportGUI(ctk.CTk):
                 return value
 
         try:
-            workbook = Workbook()
-            workbook.remove(workbook.active)  # Remove the default sheet created by Workbook()
+            # Check the output option selected by the user
+            if self.output_option.get() == "Combined Workbook":
+                # Create a single workbook
+                workbook = Workbook()
+                workbook.remove(workbook.active)  # Remove the default sheet created by Workbook()
 
-            for report_type, fields in templates.items():
-                # Ensure the sheet name is no more than 31 characters
-                sheet_name = ''.join([c for c in report_type if c.isalnum() or c in (' ', '_')]).strip()[:31]
-                if not sheet_name:
-                    sheet_name = 'Report'
+                for report_type, fields in templates.items():
+                    # Ensure the sheet name is no more than 31 characters
+                    sheet_name = ''.join([c for c in report_type if c.isalnum() or c in (' ', '_')]).strip()[:31]
+                    if not sheet_name:
+                        sheet_name = 'Report'
 
-                main_sheet = workbook.create_sheet(title=sheet_name)
-                main_sheet.append([field['csv_header'] for field in fields])
+                    main_sheet = workbook.create_sheet(title=sheet_name)
+                    main_sheet.append([field['csv_header'] for field in fields])
 
-                # Create a sheet for duplicates
-                duplicate_sheet_name = f"{sheet_name}_duplicates"
-                duplicate_sheet = workbook.create_sheet(title=duplicate_sheet_name[:31])
-                duplicate_sheet.append([field['csv_header'] for field in fields])
+                    # Create a sheet for duplicates
+                    duplicate_sheet_name = f"{sheet_name}_duplicates"
+                    duplicate_sheet = workbook.create_sheet(title=duplicate_sheet_name[:31])
+                    duplicate_sheet.append([field['csv_header'] for field in fields])
 
-                # Store the reports with their converted Date/Time for sorting and checking duplicates
-                seen_datetimes = {}
-                duplicates = []
+                    # Process reports for this report_type
+                    self.process_reports_for_type(reports, report_type, fields, main_sheet, duplicate_sheet, tz_offset, tz_name)
 
-                for report in reports:
-                    if report.get('type') == report_type:
-                        row = []
-                        report_time = None  # To store the converted Date/Time
+                # Delete column F and 'UNIT' columns in the combined workbook
+                self.delete_columns(workbook)
 
-                        for field in fields:
-                            if field['csv_header'] == 'Date/Time' and field['attribute'] == 'dateTime':
-                                # Convert the Zulu time to the selected timezone
-                                zulu_time = report.get(field['attribute'])
-                                local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                row.append(safe_value(local_time))
-                                try:
-                                    # Updated format string to match 'YYYY-MM-DD HH:MM:SS'
-                                    report_time = datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
-                                except ValueError:
-                                    # If parsing fails, skip this report
-                                    continue
-                            elif field['type'] == 'location':
-                                # Extract lat/long from the report-level location attribute
-                                location_str = report.get(field['attribute'])
-                                lat, lon = self.extract_latlong_from_location(location_str)
-                                if lat is not None and lon is not None:
-                                    mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
-                                    row.append(safe_value(mgrs_coord))
-                                else:
-                                    row.append(' ')  # Use space instead of empty cell
-                            elif field['type'] == 'geometry':
-                                # Handle geometry type fields within sections
-                                found_geometry = False
-                                for section in report.findall('.//section'):
-                                    for option in section.findall('option'):
-                                        if option.get('title') == field['csv_header'] and option.get('type') == 'geometry':
-                                            location_str = option.get('value')
-                                            lat, lon = self.extract_latlong_from_location(location_str)
-                                            if lat is not None and lon is not None:
-                                                mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
-                                                row.append(safe_value(mgrs_coord))
-                                            else:
-                                                row.append(' ')  # Use space instead of empty cell
-                                            found_geometry = True
-                                            break
-                                    if found_geometry:
-                                        break
-                                if not found_geometry:
-                                    row.append(' ')
-                            elif field['type'] == 'section':
-                                row.append(' ')
-                            elif field['type'] == 'text':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                value = element.get(field['attribute']) if element is not None else None
-                                row.append(safe_value(value))
-                            elif field['type'] == 'checkbox':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                value = 'X' if element is not None and element.get('value') == 'True' else ' '
-                                row.append(value)
-                            elif field['type'] == 'date':
-                                # Retrieve the Zulu time from the option element
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                zulu_time = element.get('value') if element is not None else None
+                # Save the combined workbook
+                output_path = os.path.join(self.output_parent_folder, f"Exported TAK Reports {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx")
+                workbook.save(output_path)
+                messagebox.showinfo("Success", f"Reports parsed and saved to {output_path}")
 
-                                # Convert the Zulu time to the selected timezone
-                                if zulu_time:
-                                    local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                    row.append(safe_value(local_time))
-                                else:
-                                    row.append(' ')
-                            elif field['type'] == 'number_with_units':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                if element is not None:
-                                    value = element.get('value')
-                                    unit = element.get('unitValue')
-                                    combined_value = f"{value} {unit}" if value and unit else None
-                                    row.append(safe_value(combined_value))
-                                else:
-                                    row.append(' ')
-                            elif field['type'] == 'number':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                value = element.get('value') if element is not None else None
-                                row.append(safe_value(value))
-                            elif field['type'] == 'range':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                value = element.get('value') if element is not None else None
-                                row.append(safe_value(value))
-                            elif field['type'] == 'route':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                value = element.get('value') if element is not None else None
-                                row.append(safe_value(value))
-                            elif field['type'] == 'time':
-                                element = report.find('.//option[@title="' + field['xml_path'] + '"]')
-                                zulu_time = element.get('value') if element is not None else None
-                                if zulu_time:
-                                    local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
-                                    row.append(safe_value(local_time))
-                                else:
-                                    row.append(' ')
-                            elif field['type'] == 'list':
-                                selected_option = None
-                                list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
-                                if list_element is not None:
-                                    for option in list_element.findall('.//option'):
-                                        if option.get('selected') == 'true':
-                                            selected_option = option.get('title')
-                                            break
-                                row.append(safe_value(selected_option))
-                            elif field['type'] == 'multi-select':
-                                selected_options = []
-                                list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
-                                if list_element is not None:
-                                    for option in list_element.findall('.//option'):
-                                        if option.get('selected') == 'true':
-                                            selected_options.append(option.get('title'))
-                                multi_value = ', '.join(selected_options) if selected_options else None
-                                row.append(safe_value(multi_value))
-                            elif field['attribute']:
-                                value = report.get(field['attribute'])
-                                row.append(safe_value(value))
-                            else:
-                                element = report.find(field['xml_path'])
-                                value = element.text if element is not None else None
-                                row.append(safe_value(value))
+            else:
+                # Separate Workbooks Option
+                for report_type, fields in templates.items():
+                    # Create a new workbook for each report type
+                    workbook = Workbook()
+                    workbook.remove(workbook.active)  # Remove the default sheet created by Workbook()
 
-                        # Skip reports before the specified start date/time
-                        if report_time and report_time < self.start_datetime:
-                            continue  # Skip this report
+                    # Ensure the sheet name is no more than 31 characters
+                    sheet_name = ''.join([c for c in report_type if c.isalnum() or c in (' ', '_')]).strip()[:31]
+                    if not sheet_name:
+                        sheet_name = 'Report'
 
-                        if report_time:
-                            # Check if this Date/Time has been seen before
-                            if report_time in seen_datetimes:
-                                # Add this row to the duplicates list
-                                duplicates.append((report_time, row))
-                            else:
-                                # Add this row to the seen dictionary
-                                seen_datetimes[report_time] = row
+                    main_sheet = workbook.create_sheet(title=sheet_name)
+                    main_sheet.append([field['csv_header'] for field in fields])
 
-                # Sort the unique and duplicate rows by the Date/Time
-                sorted_unique_rows = sorted(seen_datetimes.items())
-                sorted_duplicates = sorted(duplicates, key=lambda x: x[0])
+                    # Create a sheet for duplicates
+                    duplicate_sheet_name = f"{sheet_name}_duplicates"
+                    duplicate_sheet = workbook.create_sheet(title=duplicate_sheet_name[:31])
+                    duplicate_sheet.append([field['csv_header'] for field in fields])
 
-                # Write the sorted unique rows to the main sheet
-                for _, row in sorted_unique_rows:
-                    main_sheet.append(row)
+                    # Process reports for this report_type
+                    self.process_reports_for_type(reports, report_type, fields, main_sheet, duplicate_sheet, tz_offset, tz_name)
 
-                # Write sorted duplicates to the duplicate sheet
-                for _, row in sorted_duplicates:
-                    duplicate_sheet.append(row)
+                    # Delete column F and 'UNIT' columns in this workbook
+                    self.delete_columns(workbook)
 
-            # **Delete column F (index 6) and any 'UNIT' columns in every sheet**
+                    # Generate a filename based on the report type and current date/time
+                    sanitized_report_type = ''.join([c for c in report_type if c.isalnum() or c in (' ', '_')]).strip()
+                    output_filename = f"{sanitized_report_type} {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
+                    output_path = os.path.join(self.output_parent_folder, output_filename)
 
-            # Define the header name to delete
-            unit_header = 'UNIT'
+                    # Save the workbook
+                    workbook.save(output_path)
 
-            # Iterate over all sheets in the workbook
-            for sheet in workbook.worksheets:
-                # First, delete column F unconditionally
-                try:
-                    sheet.delete_cols(6)  # Column F has index 6
-                except Exception as e:
-                    # Log the error and continue if column F doesn't exist
-                    print(f"Failed to delete column F in sheet '{sheet.title}': {e}")
-
-                # Now, find and delete any columns with header 'UNIT'
-                header_row = [cell.value for cell in sheet[1]]  # Assuming the first row is the header
-
-                # Find all column indices where header is 'UNIT'
-                unit_columns = [idx + 1 for idx, header in enumerate(header_row) if isinstance(header, str) and header.strip().lower() == unit_header.lower()]
-
-                # Delete 'UNIT' columns from right to left to prevent shifting issues
-                for col_idx in sorted(unit_columns, reverse=True):
-                    try:
-                        sheet.delete_cols(col_idx)
-                    except Exception as e:
-                        # Log the error and continue
-                        print(f"Failed to delete 'UNIT' column at index {col_idx} in sheet '{sheet.title}': {e}")
-
-            workbook.save(output_path)
-            # messagebox.showinfo("Success", f"Reports parsed and saved to {output_path}")
+                messagebox.showinfo("Success", f"Reports parsed and saved to separate workbooks in {self.output_parent_folder}")
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred while parsing reports: {e}")
+
+    def process_reports_for_type(self, reports, report_type, fields, main_sheet, duplicate_sheet, tz_offset, tz_name):
+        def safe_value(value):
+            if value is None:
+                return ' '
+            elif isinstance(value, str) and value.strip() == '':
+                return ' '
+            else:
+                return value
+
+        # Store the reports with their converted Date/Time for sorting and checking duplicates
+        seen_datetimes = {}
+        duplicates = []
+
+        for report in reports:
+            if report.get('type') == report_type:
+                row = []
+                report_time = None  # To store the converted Date/Time
+
+                for field in fields:
+                    if field['csv_header'] == 'Date/Time' and field['attribute'] == 'dateTime':
+                        # Convert the Zulu time to the selected timezone
+                        zulu_time = report.get(field['attribute'])
+                        local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
+                        row.append(safe_value(local_time))
+                        try:
+                            # Updated format string to match 'YYYY-MM-DD HH:MM:SS'
+                            report_time = datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            # If parsing fails, skip this report
+                            continue
+                    elif field['type'] == 'location':
+                        # Extract lat/long from the report-level location attribute
+                        location_str = report.get(field['attribute'])
+                        lat, lon = self.extract_latlong_from_location(location_str)
+                        if lat is not None and lon is not None:
+                            mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
+                            row.append(safe_value(mgrs_coord))
+                        else:
+                            row.append(' ')  # Use space instead of empty cell
+                    elif field['type'] == 'geometry':
+                        # Handle geometry type fields within sections
+                        found_geometry = False
+                        for section in report.findall('.//section'):
+                            for option in section.findall('option'):
+                                if option.get('title') == field['csv_header'] and option.get('type') == 'geometry':
+                                    location_str = option.get('value')
+                                    lat, lon = self.extract_latlong_from_location(location_str)
+                                    if lat is not None and lon is not None:
+                                        mgrs_coord = self.convert_latlong_to_mgrs(lat, lon)
+                                        row.append(safe_value(mgrs_coord))
+                                    else:
+                                        row.append(' ')  # Use space instead of empty cell
+                                    found_geometry = True
+                                    break
+                            if found_geometry:
+                                break
+                        if not found_geometry:
+                            row.append(' ')
+                    elif field['type'] == 'section':
+                        row.append(' ')
+                    elif field['type'] == 'text':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        value = element.get(field['attribute']) if element is not None else None
+                        row.append(safe_value(value))
+                    elif field['type'] == 'checkbox':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        value = 'X' if element is not None and element.get('value') == 'True' else ' '
+                        row.append(value)
+                    elif field['type'] == 'date':
+                        # Retrieve the Zulu time from the option element
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        zulu_time = element.get('value') if element is not None else None
+
+                        # Convert the Zulu time to the selected timezone
+                        if zulu_time:
+                            local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
+                            row.append(safe_value(local_time))
+                        else:
+                            row.append(' ')
+                    elif field['type'] == 'number_with_units':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        if element is not None:
+                            value = element.get('value')
+                            unit = element.get('unitValue')
+                            combined_value = f"{value} {unit}" if value and unit else None
+                            row.append(safe_value(combined_value))
+                        else:
+                            row.append(' ')
+                    elif field['type'] == 'number':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        value = element.get('value') if element is not None else None
+                        row.append(safe_value(value))
+                    elif field['type'] == 'range':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        value = element.get('value') if element is not None else None
+                        row.append(safe_value(value))
+                    elif field['type'] == 'route':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        value = element.get('value') if element is not None else None
+                        row.append(safe_value(value))
+                    elif field['type'] == 'time':
+                        element = report.find('.//option[@title="' + field['xml_path'] + '"]')
+                        zulu_time = element.get('value') if element is not None else None
+                        if zulu_time:
+                            local_time = self.convert_zulu_to_timezone(zulu_time, tz_offset, tz_name)
+                            row.append(safe_value(local_time))
+                        else:
+                            row.append(' ')
+                    elif field['type'] == 'list':
+                        selected_option = None
+                        list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
+                        if list_element is not None:
+                            for option in list_element.findall('.//option'):
+                                if option.get('selected') == 'true':
+                                    selected_option = option.get('title')
+                                    break
+                        row.append(safe_value(selected_option))
+                    elif field['type'] == 'multi-select':
+                        selected_options = []
+                        list_element = report.find('.//list[@title="' + field['csv_header'] + '"]')
+                        if list_element is not None:
+                            for option in list_element.findall('.//option'):
+                                if option.get('selected') == 'true':
+                                    selected_options.append(option.get('title'))
+                        multi_value = ', '.join(selected_options) if selected_options else None
+                        row.append(safe_value(multi_value))
+                    elif field['attribute']:
+                        value = report.get(field['attribute'])
+                        row.append(safe_value(value))
+                    else:
+                        element = report.find(field['xml_path'])
+                        value = element.text if element is not None else None
+                        row.append(safe_value(value))
+
+                # Skip reports before the specified start date/time
+                if report_time and report_time < self.start_datetime:
+                    continue  # Skip this report
+
+                if report_time:
+                    # Check if this Date/Time has been seen before
+                    if report_time in seen_datetimes:
+                        # Add this row to the duplicates list
+                        duplicates.append((report_time, row))
+                    else:
+                        # Add this row to the seen dictionary
+                        seen_datetimes[report_time] = row
+
+        # Sort the unique and duplicate rows by the Date/Time
+        sorted_unique_rows = sorted(seen_datetimes.items())
+        sorted_duplicates = sorted(duplicates, key=lambda x: x[0])
+
+        # Write the sorted unique rows to the main sheet
+        for _, row in sorted_unique_rows:
+            main_sheet.append(row)
+
+        # Write sorted duplicates to the duplicate sheet
+        for _, row in sorted_duplicates:
+            duplicate_sheet.append(row)
+
+    def delete_columns(self, workbook):
+        # Define the header name to delete
+        unit_header = 'UNIT'
+
+        # Iterate over all sheets in the workbook
+        for sheet in workbook.worksheets:
+            # First, delete column F unconditionally
+            try:
+                sheet.delete_cols(6)  # Column F has index 6
+            except Exception as e:
+                # Log the error and continue if column F doesn't exist
+                print(f"Failed to delete column F in sheet '{sheet.title}': {e}")
+
+            # Now, find and delete any columns with header 'UNIT'
+            header_row = [cell.value for cell in sheet[1]]  # Assuming the first row is the header
+
+            # Find all column indices where header is 'UNIT'
+            unit_columns = [idx + 1 for idx, header in enumerate(header_row) if isinstance(header, str) and header.strip().lower() == unit_header.lower()]
+
+            # Delete 'UNIT' columns from right to left to prevent shifting issues
+            for col_idx in sorted(unit_columns, reverse=True):
+                try:
+                    sheet.delete_cols(col_idx)
+                except Exception as e:
+                    # Log the error and continue
+                    print(f"Failed to delete 'UNIT' column at index {col_idx} in sheet '{sheet.title}': {e}")
 
     def fetch_reports(self, metadata_url, file_url_template, ssl_cert):
         reports = []
@@ -763,26 +828,19 @@ class TAKReportGUI(ctk.CTk):
             if len(self.combined_reports) > 0:
                 combined_tree = ET.ElementTree(self.combined_reports)
                 combined_tree.write(self.combined_reports_path, encoding='utf-8', xml_declaration=True)
-                messagebox.showinfo("Reports Saved & Parsed", f"Combined XML reports saved to {self.combined_reports_path}.")
+                messagebox.showinfo("Reports Saved", f"Combined XML reports saved to {self.combined_reports_path}.")
             else:
                 messagebox.showinfo("No Reports", "No citrap reports found to save.")
 
             self.progress_window.destroy()
 
-            # Proceed to the next step, e.g., parsing reports
-            # After processing all entries, define the output path
-            output_path = os.path.join(self.output_parent_folder, f"Exported TAK Reports {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx")
-
-            # Parse reports and save them to the Excel workbook
+            # Proceed to parse reports
             try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)  # Remove the existing file if it exists to avoid permission issues
                 timezone = self.timezone_selection.get()
                 tz_offsets = {'EST': -5, 'CST': -6, 'MST': -7, 'PST': -8}
                 tz_offset = tz_offsets.get(timezone, -5)  # Default to EST
                 tz_name = timezone
-                self.parse_reports(self.templates, self.reports, output_path, tz_offset, tz_name)
-                messagebox.showinfo("Success", f"Reports parsed and saved to {output_path}")
+                self.parse_reports(self.templates, self.reports, tz_offset, tz_name)
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred: {e}")
 
@@ -954,27 +1012,14 @@ class TAKReportGUI(ctk.CTk):
         # Fetch reports from the server
         self.fetch_reports(metadata_url, file_url_template, ssl_cert)
 
-        # Remove or comment out the code below to prevent double saving
-        # Define the output path
-        # output_path = os.path.join(self.output_parent_folder, f"Exported TAK Reports {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx")
-
-        # Parse reports and save them to the Excel workbook
-        # try:
-        #     if os.path.exists(output_path):
-        #         os.remove(output_path)  # Remove the existing file if it exists to avoid permission issues
-        #     self.parse_reports(self.templates, self.reports, output_path, tz_offset, tz_name)
-        # except Exception as e:
-        #     messagebox.showerror("Error", f"An error occurred: {e}")
-
-
     def return_to_home(self):
         # Close the current TAK Report Parser window
         self.destroy()
 
         # Open the Home Page
-        Home_Page.open_home_page()  # Assuming you have a function in your home_page script that opens the main page
+        Home_Page.open_home_page()  
+
 
 # Create and run the application
 if __name__ == "__main__":
     app = TAKReportGUI()
-
