@@ -1,0 +1,2 @@
+Ticket Number,Base URL,Port,PFX File,Password,Template Path,Output Folder
+1,excor.tdkweb.org,8443,C:/Users/dkens/OneDrive/Desktop/LMCO TAK Certs/excor/excorClient.p12,atakatak,C:/Users/dkens/Desktop/Covan TAK Report Parser Outputs/combined_reports.xml,C:/Users/dkens/Desktop/Covan TAK Report Parser Outputs

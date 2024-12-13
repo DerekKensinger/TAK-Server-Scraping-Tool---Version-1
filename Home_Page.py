@@ -2,7 +2,6 @@ import customtkinter as ctk
 import tak_report_parser
 import geochat_parser
 import zello_voip_export
-# Note: We remove `import cot_parser` here to avoid circular import.
 
 def open_home_page():
     root = ctk.CTk()
@@ -27,7 +26,6 @@ def open_home_page():
         elif script_name == "zello_voip_export":
             zello_voip_export.ZelloVoipExportGUI()
         elif script_name == "cot_parser":
-            # Import here to avoid circular imports.
             import cot_parser
             app = cot_parser.CoTParserGUI()
             app.mainloop()

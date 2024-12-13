@@ -40,6 +40,8 @@ def createParsedLogsFolder(filePath):
 # File Processing Functions
 #############################
 def enforce_indentation(event):
+    # This function is no longer necessary if we are no longer cleaning the file,
+    # but we leave it here in case it's still called elsewhere.
     lines = event.split(b'\n')
     indented_lines = []
     indent_level = 0
@@ -53,6 +55,8 @@ def enforce_indentation(event):
     return b'\n'.join(indented_lines)
 
 def cleanFileContent(content):
+    # This cleaning step is no longer required before export.
+    # If needed, you can remove or leave this function as is.
     cleaned_content = []
     events = content.split(b'</event>')
     for i, event in enumerate(events[:-1]):
@@ -306,72 +310,169 @@ def extractUIDsAndCallsigns(filePath, log_callback):
     GlobalState.selectedFiles = [filePath]
 
 #############################
-# New: Export CoT Details Code Integration
+# Updated Export CoT Details Code for Uncleaned Logs
 #############################
 def export_cot_details(filePath, log_callback):
     if not os.path.isfile(filePath):
         log_callback(f"{filePath} is not a valid file.")
         return
 
-    script_dir = os.path.dirname(filePath)
-    input_file = filePath
-    output_file = os.path.join(script_dir, "CoT_Data.xlsx")
+    log_callback("Parsing file for CoT details export with robust fallback extraction...")
 
-    def preprocess_file(file_path):
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
-        content = re.sub(r"<\?xml.*?\?>", "", content)
-        wrapped_content = f"<root>{content}</root>"
-        return wrapped_content.strip()
+    # Read and decode content, replacing invalid chars
+    with open(filePath, 'rb') as f:
+        raw_content = f.read()
 
-    log_callback("Preprocessing and parsing file for CoT details export...")
-    sanitized_content = preprocess_file(input_file)
-    try:
-        root = ET.fromstring(sanitized_content)
-    except ET.ParseError:
-        log_callback("Failed to parse the XML content. Ensure this is a cleaned and well-formed file.")
-        return
+    content_str = raw_content.decode('utf-8', 'replace')
+    # Remove invalid XML chars
+    content_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content_str)
 
+    events = content_str.split('</event>')
+    total = len(events) - 1
     uid_data = {}
 
-    def parse_remarks(remarks_text):
-        fields = {}
-        if remarks_text:
-            for line in remarks_text.splitlines():
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    fields[key.strip()] = value.strip()
-        return fields
+    def parse_remarks_line_by_line(remarks_text, data_dict):
+        for line in remarks_text.splitlines():
+            line = line.strip()
+            if ":" in line:
+                key, value = line.split(":", 1)
+                clean_key = key.strip().replace(" ", "_")
+                data_dict[f"remarks_{clean_key}"] = value.strip()
 
-    events = root.findall("event")
-    total = len(events)
-    for idx, event in enumerate(events):
-        uid = event.get("uid")
+    def fallback_extract_data(event_text):
+        fallback_data = {}
+        # UID
+        uid_match = re.search(r'uid="([^"]+)"', event_text)
+        uid_val = uid_match.group(1) if uid_match else "UNKNOWN_UID"
+        fallback_data["uid"] = uid_val
+
+        # Extract detail block
+        detail_match = re.search(r'<detail>([\s\S]*?)</detail>', event_text)
+        if detail_match:
+            detail_content = detail_match.group(1)
+
+            # Extract remarks text if present
+            remarks_match = re.search(r'<remarks[^>]*>([\s\S]*?)</remarks>', detail_content)
+            if remarks_match:
+                remarks = remarks_match.group(1).strip()
+                # Parse line-by-line for key-value pairs
+                parse_remarks_line_by_line(remarks, fallback_data)
+                # Also store the raw remarks if desired
+                fallback_data['detail_detail_remarks_text'] = remarks
+
+            # Extract attributes from all tags within detail
+            # This handles status, __group, takv, track, contact, etc.
+            # We'll find all tags inside <detail> except the closing tag.
+            tags_in_detail = re.findall(r'<(\w[\w\-_]*)([^>]*)>', detail_content)
+
+            for tag_name, attrs_str in tags_in_detail:
+                # Skip the 'detail' closing scenario
+                if tag_name.lower() == 'detail':
+                    continue
+
+                # If this is remarks, we've already handled it line-by-line above
+                if tag_name.lower() == 'remarks':
+                    continue
+
+                # Extract attributes for this tag
+                attrs = re.findall(r'(\w[\w\-_]*)="([^"]*)"', attrs_str)
+                for attr_name, attr_val in attrs:
+                    # Store as detail_<tag>_<attribute> = value
+                    fallback_data[f"detail_{tag_name}_{attr_name}"] = attr_val
+
+        else:
+            # If no <detail> tag, just do what we did previously for known tags:
+            contact_match = re.search(r'<contact[^>]*callsign="([^"]+)"', event_text)
+            if contact_match:
+                fallback_data['contact_callsign'] = contact_match.group(1)
+
+            # Remarks outside of detail (rare, but just in case)
+            remarks_match = re.search(r'<remarks[^>]*>([\s\S]*?)</remarks>', event_text)
+            if remarks_match:
+                remarks = remarks_match.group(1).strip()
+                parse_remarks_line_by_line(remarks, fallback_data)
+                fallback_data['detail_detail_remarks_text'] = remarks
+
+            # Point, track (if outside detail, which is uncommon)
+            point_match = re.search(r'<point[^>]+>', event_text)
+            if point_match:
+                point_tag = point_match.group(0)
+                for attr in ["lat", "lon", "hae", "ce", "le"]:
+                    attr_match = re.search(fr'{attr}="([^"]+)"', point_tag)
+                    if attr_match:
+                        fallback_data[f"point_{attr}"] = attr_match.group(1)
+
+            track_match = re.search(r'<track[^>]+>', event_text)
+            if track_match:
+                track_tag = track_match.group(0)
+                for attr in ["speed", "course"]:
+                    attr_match = re.search(fr'{attr}="([^"]+)"', track_tag)
+                    if attr_match:
+                        fallback_data[f"detail_track_{attr}"] = attr_match.group(1)
+
+        return fallback_data
+
+    def flatten_element(element, prefix="detail"):
+        data = {}
+        for attr_name, attr_value in element.attrib.items():
+            data[f"{prefix}_{element.tag}_{attr_name}"] = attr_value
+
+        if element.text and element.text.strip():
+            data[f"{prefix}_{element.tag}_text"] = element.text.strip()
+
+        for child in element:
+            child_data = flatten_element(child, prefix=f"{prefix}_{element.tag}")
+            data.update(child_data)
+        return data
+
+    for idx, event_str in enumerate(events[:-1]):
+        event_str = event_str.strip() + '</event>'
+        if not event_str.strip():
+            continue
+
+        try:
+            root = ET.fromstring(event_str)
+        except ET.ParseError:
+            log_callback(f"XML parse failed at index {idx}, using fallback extraction...")
+            fallback_data = fallback_extract_data(event_str)
+            uid = fallback_data.get("uid", "UNKNOWN_UID")
+            if uid not in uid_data:
+                uid_data[uid] = []
+            uid_data[uid].append(fallback_data)
+            continue
+
+        uid = root.get("uid", "UNKNOWN_UID")
         if uid not in uid_data:
             uid_data[uid] = []
+
         event_data = {}
-        point = event.find("point")
+        detail = root.find("detail")
+        if detail is not None:
+            detail_data = flatten_element(detail, prefix="detail")
+            event_data.update(detail_data)
+
+        point = root.find("point")
         if point is not None:
             for attr in ["lat", "lon", "hae", "ce", "le"]:
-                event_data[f"point_{attr}"] = point.get(attr)
-        detail = event.find("detail")
-        if detail is not None:
-            contact = detail.find("contact")
-            if contact is not None:
-                for attr in ["callsign", "endpoint", "phone"]:
-                    event_data[f"contact_{attr}"] = contact.get(attr)
-            track = detail.find("track")
-            if track is not None:
-                for attr in ["speed", "course"]:
-                    event_data[f"track_{attr}"] = track.get(attr)
-            height = detail.find("height")
-            if height is not None:
-                event_data["height_value"] = height.get("value")
-            remarks = detail.find("remarks")
-            if remarks is not None and remarks.text:
-                event_data.update(parse_remarks(remarks.text))
-        if event_data:
-            uid_data[uid].append(event_data)
+                val = point.get(attr)
+                if val:
+                    event_data[f"point_{attr}"] = val
+
+        # Parse remarks line-by-line if we have a remarks text field
+        remarks_keys = [k for k in event_data.keys() if 'remarks_text' in k]
+        for rk in remarks_keys:
+            remarks_content = event_data[rk]
+            parse_remarks_line_by_line(remarks_content, event_data)
+            # Optionally remove raw remarks text column if desired
+            # del event_data[rk]
+
+        # Determine if we have a callsign
+        callsign_key = [k for k in event_data.keys() if 'contact_callsign' in k]
+        if callsign_key:
+            event_data['contact_callsign'] = event_data[callsign_key[0]]
+
+        uid_data[uid].append(event_data)
+
         if idx % 1000 == 0 and idx > 0:
             log_callback(f"Processed {idx}/{total} events...")
 
@@ -379,18 +480,28 @@ def export_cot_details(filePath, log_callback):
         sanitized = re.sub(r"[\\/*?:\[\]]", "", sheet_name)
         return sanitized[:31]
 
+    script_dir = os.path.dirname(filePath)
+    output_file = os.path.join(script_dir, "CoT_Data.xlsx")
     log_callback("Writing extracted CoT details to Excel...")
-    sheets_created = False
 
+    sheets_created = False
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         for uid, records in uid_data.items():
-            if records:
-                df = pd.DataFrame(records)
-                sanitized_uid = sanitize_sheet_name(uid)
-                df.to_excel(writer, sheet_name=sanitized_uid, index=False)
-                sheets_created = True
+            if not records:
+                continue
 
-        # If no sheets were created, add a dummy sheet
+            # Determine sheet name
+            sheet_name = uid
+            for record in records:
+                if 'contact_callsign' in record and record['contact_callsign']:
+                    sheet_name = record['contact_callsign']
+                    break
+
+            sanitized_sheet_name = sanitize_sheet_name(sheet_name)
+            df = pd.DataFrame(records)
+            df.to_excel(writer, sheet_name=sanitized_sheet_name, index=False)
+            sheets_created = True
+
         if not sheets_created:
             log_callback("No valid event data found. Creating a dummy sheet.")
             df = pd.DataFrame({"Info": ["No data available."]})
@@ -446,7 +557,6 @@ class CoTParserGUI(ctk.CTk):
         self.export_cot_button = ctk.CTkButton(buttons_frame, text="Export CoT Details", command=self.export_cot_details_action, width=200)
         self.export_cot_button.grid(row=5, column=0, pady=10)
 
-        # Return to Home button
         self.return_home_button = ctk.CTkButton(buttons_frame, text="Return to Home", command=self.return_home_action, width=200)
         self.return_home_button.grid(row=6, column=0, pady=10)
 
