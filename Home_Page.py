@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import tak_report_parser
 import geochat_parser
-import zello_voip_export
+import video_editor
 
 def open_home_page():
     root = ctk.CTk()
@@ -23,8 +23,8 @@ def open_home_page():
             tak_report_parser.TAKReportGUI()
         elif script_name == "geochat_parser":
             geochat_parser.GeoChatParserGUI()
-        elif script_name == "zello_voip_export":
-            zello_voip_export.ZelloVoipExportGUI()
+        elif script_name == "video_editor":
+            video_editor.VideoEditorGUI()
         elif script_name == "cot_parser":
             import cot_parser
             app = cot_parser.CoTParserGUI()
@@ -33,7 +33,7 @@ def open_home_page():
     buttons_info = [
         ("TAK Report Parser", "tak_report_parser"),
         ("GeoChat Parser", "geochat_parser"),
-        ("Zello VOIP Exporter - Coming Soon", "zello_voip_export"),
+        ("Video Editor", "video_editor"),
         ("CoT Data Processor", "cot_parser"),
     ]
 

@@ -4,9 +4,11 @@ import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook  # You can remove this import if you're no longer using Excel at all.
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+import pytz  # We'll keep this for the Zulu->EST conversions
 
 #############################
 # Global State Class
@@ -40,8 +42,6 @@ def createParsedLogsFolder(filePath):
 # File Processing Functions
 #############################
 def enforce_indentation(event):
-    # This function is no longer necessary if we are no longer cleaning the file,
-    # but we leave it here in case it's still called elsewhere.
     lines = event.split(b'\n')
     indented_lines = []
     indent_level = 0
@@ -50,13 +50,13 @@ def enforce_indentation(event):
         if stripped_line.startswith(b'</'):
             indent_level -= 1
         indented_lines.append(b'    ' * indent_level + stripped_line)
-        if stripped_line.startswith(b'<') and not stripped_line.startswith(b'</') and not stripped_line.endswith(b'/>'):
+        if (stripped_line.startswith(b'<') and 
+            not stripped_line.startswith(b'</') and 
+            not stripped_line.endswith(b'/>')):
             indent_level += 1
     return b'\n'.join(indented_lines)
 
 def cleanFileContent(content):
-    # This cleaning step is no longer required before export.
-    # If needed, you can remove or leave this function as is.
     cleaned_content = []
     events = content.split(b'</event>')
     for i, event in enumerate(events[:-1]):
@@ -117,7 +117,7 @@ def removeDuplicates(filePath, log_callback):
         cleanedFile.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
         for event in unique_events:
             cleanedFile.write(event)
-    log_callback(f"Duplicates removed. Cleaned file saved as: {newFilePath}")
+    log_callback(f"Duplicates removed. Cleaned file saved as: {newFileName}")
     GlobalState.selectedFiles = [newFilePath]
 
 def cleanTimeString(time_str):
@@ -195,7 +195,7 @@ def adjustEventTimes(filePath, new_time_str, log_callback):
         adjustedFile.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
         for event in unique_events:
             adjustedFile.write(event)
-    log_callback(f"Event times adjusted. File saved as: {newFilePath}")
+    log_callback(f"Event times adjusted. File saved as: {newFileName}")
     GlobalState.selectedFiles = [newFilePath]
 
 def formatEvent(event_str):
@@ -309,27 +309,22 @@ def extractUIDsAndCallsigns(filePath, log_callback):
         log_callback(f"Errors encountered. See {error_log_filename} for details.")
     GlobalState.selectedFiles = [filePath]
 
-#############################
-# Updated Export CoT Details Code for Uncleaned Logs
-#############################
-def export_cot_details(filePath, log_callback):
-    if not os.path.isfile(filePath):
-        log_callback(f"{filePath} is not a valid file.")
-        return
+####################################
+# Multi-file logic for CSV export
+####################################
+utc = pytz.UTC
+est = pytz.timezone("America/New_York")
 
-    log_callback("Parsing file for CoT details export with robust fallback extraction...")
-
-    # Read and decode content, replacing invalid chars
-    with open(filePath, 'rb') as f:
-        raw_content = f.read()
-
-    content_str = raw_content.decode('utf-8', 'replace')
-    # Remove invalid XML chars
-    content_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content_str)
-
-    events = content_str.split('</event>')
-    total = len(events) - 1
-    uid_data = {}
+def export_cot_details_multiple_files(file_list, log_callback, output_dir=None):
+    """
+    Reads and parses multiple .txt CoT files, grouping all events by 'detail_contact_callsign'.
+    Exports a SINGLE CSV file with combined data (no multiple sheets).
+    If there's no data, writes a dummy CSV row.
+    
+    If output_dir is provided, we save the CSV there; 
+    otherwise, we use the folder of the first file. 
+    """
+    combined_callsign_data = {}  # {callsign: [list_of_event_dicts]}
 
     def parse_remarks_line_by_line(remarks_text, data_dict):
         for line in remarks_text.splitlines():
@@ -341,59 +336,42 @@ def export_cot_details(filePath, log_callback):
 
     def fallback_extract_data(event_text):
         fallback_data = {}
-        # UID
         uid_match = re.search(r'uid="([^"]+)"', event_text)
         uid_val = uid_match.group(1) if uid_match else "UNKNOWN_UID"
         fallback_data["uid"] = uid_val
 
-        # Extract detail block
         detail_match = re.search(r'<detail>([\s\S]*?)</detail>', event_text)
         if detail_match:
             detail_content = detail_match.group(1)
-
-            # Extract remarks text if present
             remarks_match = re.search(r'<remarks[^>]*>([\s\S]*?)</remarks>', detail_content)
             if remarks_match:
                 remarks = remarks_match.group(1).strip()
-                # Parse line-by-line for key-value pairs
                 parse_remarks_line_by_line(remarks, fallback_data)
-                # Also store the raw remarks if desired
                 fallback_data['detail_detail_remarks_text'] = remarks
 
-            # Extract attributes from all tags within detail
-            # This handles status, __group, takv, track, contact, etc.
-            # We'll find all tags inside <detail> except the closing tag.
             tags_in_detail = re.findall(r'<(\w[\w\-_]*)([^>]*)>', detail_content)
-
             for tag_name, attrs_str in tags_in_detail:
-                # Skip the 'detail' closing scenario
                 if tag_name.lower() == 'detail':
                     continue
-
-                # If this is remarks, we've already handled it line-by-line above
                 if tag_name.lower() == 'remarks':
                     continue
-
-                # Extract attributes for this tag
                 attrs = re.findall(r'(\w[\w\-_]*)="([^"]*)"', attrs_str)
                 for attr_name, attr_val in attrs:
-                    # Store as detail_<tag>_<attribute> = value
+                    if tag_name.lower() == 'contact' and attr_name.lower() == 'callsign':
+                        fallback_data['detail_contact_callsign'] = attr_val
                     fallback_data[f"detail_{tag_name}_{attr_name}"] = attr_val
-
         else:
-            # If no <detail> tag, just do what we did previously for known tags:
+            # outside <detail>
             contact_match = re.search(r'<contact[^>]*callsign="([^"]+)"', event_text)
             if contact_match:
-                fallback_data['contact_callsign'] = contact_match.group(1)
+                fallback_data['detail_contact_callsign'] = contact_match.group(1)
 
-            # Remarks outside of detail (rare, but just in case)
             remarks_match = re.search(r'<remarks[^>]*>([\s\S]*?)</remarks>', event_text)
             if remarks_match:
                 remarks = remarks_match.group(1).strip()
                 parse_remarks_line_by_line(remarks, fallback_data)
                 fallback_data['detail_detail_remarks_text'] = remarks
 
-            # Point, track (if outside detail, which is uncommon)
             point_match = re.search(r'<point[^>]+>', event_text)
             if point_match:
                 point_tag = point_match.group(0)
@@ -416,7 +394,6 @@ def export_cot_details(filePath, log_callback):
         data = {}
         for attr_name, attr_value in element.attrib.items():
             data[f"{prefix}_{element.tag}_{attr_name}"] = attr_value
-
         if element.text and element.text.strip():
             data[f"{prefix}_{element.tag}_text"] = element.text.strip()
 
@@ -425,89 +402,132 @@ def export_cot_details(filePath, log_callback):
             data.update(child_data)
         return data
 
-    for idx, event_str in enumerate(events[:-1]):
-        event_str = event_str.strip() + '</event>'
-        if not event_str.strip():
+    def convert_zulu_to_est(event_data):
+        # Convert "TAK-Server-..." columns from Z to EST ("YYYY-MM-DD T HH:MM:SS")
+        for k, v in event_data.items():
+            if (k.startswith("detail__flow-tags__TAK-Server-")
+                and isinstance(v, str)
+                and v.endswith("Z")):
+                try:
+                    dt_utc = datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+                    dt_utc = utc.localize(dt_utc)
+                    dt_est = dt_utc.astimezone(est)
+                    event_data[k] = dt_est.strftime("%Y-%m-%d T %H:%M:%S")
+                except ValueError:
+                    pass
+
+    def accumulate_data_into_combined(callsign_val, event_data):
+        if callsign_val not in combined_callsign_data:
+            combined_callsign_data[callsign_val] = []
+        combined_callsign_data[callsign_val].append(event_data)
+
+    now_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    if output_dir and os.path.isdir(output_dir):
+        script_dir = output_dir
+    else:
+        if file_list:
+            script_dir = os.path.dirname(file_list[0])
+        else:
+            script_dir = os.getcwd()
+
+    if file_list and len(file_list) == 1 and os.path.isfile(file_list[0]):
+        base_name = os.path.splitext(os.path.basename(file_list[0]))[0]
+    elif file_list:
+        folder = os.path.dirname(file_list[0])
+        base_name = os.path.basename(folder)
+    else:
+        base_name = "CoT_Data"
+
+    # ***** CSV Export Instead of XLSX *****
+    out_name = f"Exported CoT Details - {base_name}_{now_str}.csv"
+    output_file = os.path.join(script_dir, out_name)
+
+    # Parse each file
+    for filePath in file_list:
+        if not os.path.isfile(filePath):
+            log_callback(f"{filePath} is not a valid file.")
             continue
 
+        log_callback(f"Parsing file: {filePath}")
         try:
-            root = ET.fromstring(event_str)
-        except ET.ParseError:
-            log_callback(f"XML parse failed at index {idx}, using fallback extraction...")
-            fallback_data = fallback_extract_data(event_str)
-            uid = fallback_data.get("uid", "UNKNOWN_UID")
-            if uid not in uid_data:
-                uid_data[uid] = []
-            uid_data[uid].append(fallback_data)
+            with open(filePath, 'rb') as f:
+                raw_content = f.read()
+        except Exception as e:
+            log_callback(f"Error reading file {filePath}: {e}")
             continue
 
-        uid = root.get("uid", "UNKNOWN_UID")
-        if uid not in uid_data:
-            uid_data[uid] = []
+        content_str = raw_content.decode('utf-8', 'replace')
+        content_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content_str)
 
-        event_data = {}
-        detail = root.find("detail")
-        if detail is not None:
-            detail_data = flatten_element(detail, prefix="detail")
-            event_data.update(detail_data)
+        events = content_str.split('</event>')
+        total = len(events) - 1
 
-        point = root.find("point")
-        if point is not None:
-            for attr in ["lat", "lon", "hae", "ce", "le"]:
-                val = point.get(attr)
-                if val:
-                    event_data[f"point_{attr}"] = val
-
-        # Parse remarks line-by-line if we have a remarks text field
-        remarks_keys = [k for k in event_data.keys() if 'remarks_text' in k]
-        for rk in remarks_keys:
-            remarks_content = event_data[rk]
-            parse_remarks_line_by_line(remarks_content, event_data)
-            # Optionally remove raw remarks text column if desired
-            # del event_data[rk]
-
-        # Determine if we have a callsign
-        callsign_key = [k for k in event_data.keys() if 'contact_callsign' in k]
-        if callsign_key:
-            event_data['contact_callsign'] = event_data[callsign_key[0]]
-
-        uid_data[uid].append(event_data)
-
-        if idx % 1000 == 0 and idx > 0:
-            log_callback(f"Processed {idx}/{total} events...")
-
-    def sanitize_sheet_name(sheet_name):
-        sanitized = re.sub(r"[\\/*?:\[\]]", "", sheet_name)
-        return sanitized[:31]
-
-    script_dir = os.path.dirname(filePath)
-    output_file = os.path.join(script_dir, "CoT_Data.xlsx")
-    log_callback("Writing extracted CoT details to Excel...")
-
-    sheets_created = False
-    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        for uid, records in uid_data.items():
-            if not records:
+        for idx, event_str in enumerate(events[:-1]):
+            event_str = event_str.strip() + '</event>'
+            if not event_str.strip():
                 continue
 
-            # Determine sheet name
-            sheet_name = uid
-            for record in records:
-                if 'contact_callsign' in record and record['contact_callsign']:
-                    sheet_name = record['contact_callsign']
-                    break
+            try:
+                root = ET.fromstring(event_str)
+                event_data = {}
 
-            sanitized_sheet_name = sanitize_sheet_name(sheet_name)
-            df = pd.DataFrame(records)
-            df.to_excel(writer, sheet_name=sanitized_sheet_name, index=False)
-            sheets_created = True
+                detail = root.find("detail")
+                if detail is not None:
+                    detail_data = flatten_element(detail, prefix="detail")
+                    event_data.update(detail_data)
 
-        if not sheets_created:
-            log_callback("No valid event data found. Creating a dummy sheet.")
-            df = pd.DataFrame({"Info": ["No data available."]})
-            df.to_excel(writer, sheet_name="No_Data", index=False)
+                point = root.find("point")
+                if point is not None:
+                    for attr in ["lat", "lon", "hae", "ce", "le"]:
+                        val = point.get(attr)
+                        if val:
+                            event_data[f"point_{attr}"] = val
 
-    log_callback(f"Excel file created: {output_file}")
+                # remarks line-by-line
+                remarks_keys = [k for k in event_data.keys() if 'remarks_text' in k]
+                for rk in remarks_keys:
+                    parse_remarks_line_by_line(event_data[rk], event_data)
+
+                convert_zulu_to_est(event_data)
+
+                callsign_val = event_data.get("detail_contact_callsign", "").strip()
+                if not callsign_val:
+                    continue
+                accumulate_data_into_combined(callsign_val, event_data)
+
+            except ET.ParseError:
+                fallback_data = fallback_extract_data(event_str)
+                convert_zulu_to_est(fallback_data)
+                callsign_val = fallback_data.get("detail_contact_callsign", "").strip()
+                if not callsign_val:
+                    continue
+                accumulate_data_into_combined(callsign_val, fallback_data)
+
+            if idx % 1000 == 0 and idx > 0:
+                log_callback(f"Processed {idx}/{total} events from {filePath}...")
+
+    log_callback(f"Writing combined CoT details to CSV: {output_file}")
+
+    # Build a single combined DataFrame
+    all_records = []
+    for callsign_val, records in combined_callsign_data.items():
+        for rec in records:
+            # Keep track of callsign in a separate column
+            rec_copy = dict(rec)
+            rec_copy['Callsign'] = callsign_val
+            all_records.append(rec_copy)
+
+    if not all_records:
+        # No data found
+        df_dummy = pd.DataFrame([{"Info": "No data available."}])
+        df_dummy.to_csv(output_file, index=False)
+        log_callback("No data found across all .txt files. Created a dummy CSV.")
+    else:
+        df_all = pd.DataFrame(all_records)
+        df_all.to_csv(output_file, index=False)
+
+    log_callback(f"CSV file created: {output_file}")
 
 #############################
 # GUI Application
@@ -515,10 +535,8 @@ def export_cot_details(filePath, log_callback):
 class CoTParserGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-
         self.title("CoT Data Processor")
         self.geometry("800x800")
-
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
@@ -577,20 +595,52 @@ class CoTParserGUI(ctk.CTk):
         self.update_idletasks()
 
     def load_file(self):
-        path = filedialog.askopenfilename(title="Select a File", filetypes=[("All files", "*.*")])
-        if not path:
+        option = messagebox.askquestion(
+            "File or Folder", 
+            "Do you want to select a single file?\n\nSelect 'Yes' for a file or 'No' for a folder."
+        )
+        if option == 'yes':
+            path = filedialog.askopenfilename(title="Select a File", filetypes=[("All files", "*.*")])
+            if not path:
+                self.log("No file selected.")
+                return
+            try:
+                path = validateFilePath(path)
+                if not os.path.isfile(path):
+                    messagebox.showerror("Error", "The selected file does not exist.")
+                    return
+                GlobalState.selectedFiles = [path]
+                self.log(f"Loaded single file: {os.path.basename(path)}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load file: {e}")
+        else:
             path = filedialog.askdirectory(title="Select a Folder")
             if not path:
+                self.log("No folder selected.")
                 return
-        try:
-            path = validateFilePath(path)
-            if not os.path.exists(path):
-                messagebox.showerror("Error", "The provided file or folder does not exist.")
-                return
-            loadFiles(path)
-            self.log(f"Loaded files from: {path}")
-        except ValueError as e:
-            messagebox.showerror("Error", str(e))
+            try:
+                path = validateFilePath(path)
+                if not os.path.isdir(path):
+                    messagebox.showerror("Error", "The selected folder does not exist.")
+                    return
+                loadFiles(path)
+                self.log(f"Loaded folder: {path} with {len(GlobalState.selectedFiles)} files.")
+                for file in GlobalState.selectedFiles:
+                    self.log(f" - {file}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load folder: {e}")
+
+    def export_cot_details_action(self):
+        if not GlobalState.selectedFiles:
+            messagebox.showwarning("No File", "No file selected. Please load a file first.")
+            return
+        
+        out_dir = filedialog.askdirectory(title="Select Destination Folder for CoT Export")
+        if not out_dir:
+            self.log("No output folder selected. Export canceled.")
+            return
+
+        export_cot_details_multiple_files(GlobalState.selectedFiles, self.log, output_dir=out_dir)
 
     def remove_duplicates_action(self):
         if not GlobalState.selectedFiles:
@@ -604,7 +654,10 @@ class CoTParserGUI(ctk.CTk):
             messagebox.showwarning("No File", "No file selected. Please load a file first.")
             return
         file = GlobalState.selectedFiles[0]
-        dialog = ctk.CTkInputDialog(text="Enter new base time in Zulu format (e.g. 2024-09-16T17:13:48Z):", title="Adjust Event Times")
+        dialog = ctk.CTkInputDialog(
+            text="Enter new base time in Zulu format (e.g. 2025-01-12T17:13:48Z):", 
+            title="Adjust Event Times"
+        )
         new_time = dialog.get_input()
         if not new_time:
             return
@@ -615,7 +668,10 @@ class CoTParserGUI(ctk.CTk):
             messagebox.showwarning("No File", "No file selected. Please load a file first.")
             return
         file = GlobalState.selectedFiles[0]
-        dialog = ctk.CTkInputDialog(text="Enter max file size (MB, up to 100):", title="Reduce File Size")
+        dialog = ctk.CTkInputDialog(
+            text="Enter max file size (MB, up to 100):",
+            title="Reduce File Size"
+        )
         result = dialog.get_input()
         if not result:
             return
@@ -628,16 +684,8 @@ class CoTParserGUI(ctk.CTk):
         file = GlobalState.selectedFiles[0]
         extractUIDsAndCallsigns(file, self.log)
 
-    def export_cot_details_action(self):
-        if not GlobalState.selectedFiles:
-            messagebox.showwarning("No File", "No file selected. Please load a file first.")
-            return
-        file = GlobalState.selectedFiles[0]
-        export_cot_details(file, self.log)
-
     def return_home_action(self):
         self.destroy()
-        # Import home_page here to avoid circular imports at the top
         import Home_Page
         Home_Page.open_home_page()
 
