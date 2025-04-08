@@ -60,12 +60,12 @@ class VideoEditorGUI(ctk.CTk):
         title_label.pack(pady=10)
 
         button_texts = [
-            "Convert Video to mp4 1:1",
-            "Compressing of video (resolution, framerate, audio)",
-            "Combining of clips",
-            "Split clip",
-            "Clip a clip",
-            "Generate gif"
+            "Convert Video From MKV to MP4",
+            "Compress A Video (Resolution, Framerate, Audio)",
+            "Combine Clips",
+            "Split A Clip",
+            "Clip a Clip",
+            "Generate A GIF"
         ]
 
         commands = [
@@ -533,7 +533,7 @@ class VideoEditorGUI(ctk.CTk):
             # 1st pass: generate palette
             cmd_palette = [
                 "ffmpeg", "-ss", start_time, "-t", str(duration), "-i", str(input_file),
-                "-vf", "fps=30,scale=1920:-1:force_original_aspect_ratio=decrease,palettegen",
+                "-vf", "fps=15,scale=1920:-1:force_original_aspect_ratio=decrease,palettegen",
                 str(palette_path)
             ]
             self.log("🖌️ Generating palette...")
@@ -547,7 +547,7 @@ class VideoEditorGUI(ctk.CTk):
             # 2nd pass: use palette to generate gif
             cmd_gif = [
                 "ffmpeg", "-ss", start_time, "-t", str(duration), "-i", str(input_file), "-i", str(palette_path),
-                "-lavfi", "fps=30,scale=1920:-1:force_original_aspect_ratio=decrease [x]; [x][1:v] paletteuse",
+                "-filter_complex", "[0:v] fps=15,scale=1920:-1:force_original_aspect_ratio=decrease [x]; [x][1:v] paletteuse",
                 "-loop", "0", str(output_gif)
             ]
             self.log("🎞️ Creating GIF...")
